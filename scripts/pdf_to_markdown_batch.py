@@ -46,7 +46,15 @@ def _extract_text_via_easyocr(img_path):
     if reader is None:
         return None
     try:
-        results = reader.readtext(img_path, detail=0, paragraph=True)
+        import cv2
+        import numpy as np
+        with open(img_path, 'rb') as f:
+            img_bytes = f.read()
+        img_array = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
+        if img_array is None:
+            print(f'  [EasyOCR] cannot decode image: {img_path}', flush=True)
+            return None
+        results = reader.readtext(img_array, detail=0, paragraph=True)
         text = '\n'.join(results).strip()
         return text if text else None
     except Exception as e:
