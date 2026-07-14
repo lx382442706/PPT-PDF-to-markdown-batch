@@ -22,8 +22,8 @@ agent_created: true
 
 | 格式 | 管线 | 后处理特性 |
 |------|------|-----------|
-| PPT/PPTX | **PowerPoint COM → PDF** → PyMuPDF 快照 + 文本 | PPT→PDF 导出 → 逐页截图+文本 → LLM 排版 |
-| PDF（PPT导出） | **PyMuPDF 快照** + 文本提取（与 PPT 共用管线） | 自动检测 16:9/A4横向/4:3 分流，逐页截图+文本 → LLM 排版 |
+| PPT/PPTX | **PowerPoint COM → PDF** → PyMuPDF 快照 + 文本→EasyOCR降级 | PPT→PDF导出 → 逐页截图+文本提取（不足时EasyOCR降级）→ LLM排版 |
+| PDF（PPT导出） | **PyMuPDF 快照** + 文本提取→EasyOCR降级（与 PPT 共用管线） | 自动检测 16:9/A4横向/4:3 分流，文本不足即用EasyOCR → LLM排版 |
 | PDF（普通） | MinerU API (vlm) | 正文截取、图片宽度100%、标题规范化（H1 起步）、页码删除 |
 
 ## 核心能力
@@ -32,7 +32,7 @@ agent_created: true
 |------|------|
 | **PPT→PDF导出** | PowerPoint COM 将 PPT/PPTX 导出为 PDF（ppSaveAsPDF） |
 | **PDF快照** | PyMuPDF (fitz) 逐页渲染 1920px 宽 PNG 截图（PPT/PPTX/PPT导出PDF 通用） |
-| **PDF文本** | PyMuPDF 原生文本提取（准确率远高于 OCR） |
+| **PDF文本** | PyMuPDF 文本提取 + EasyOCR 降级（文字过少时自动切换） |
 | **LLM排版** | DeepSeek Chat 智能整合（默认）：去冗余、章节提取、段落优化、表格保留，带 3 次指数退避重试 |
 | **名称清理** | 自动去人名"来潇"、版本号 V1/V2/V3 |
 | **日期提取** | 优先文件名（含嵌入位置如"报告-2025.7.29"），无日期用文件修改时间 |
@@ -43,6 +43,7 @@ agent_created: true
 | **标题规范** | 自动识别编号标题，从 H1 (#) 起步 |
 | **唯一编码** | 自动生成 8 位唯一编码，插入 ES 链接并重命名源文件 |
 | **降级保护** | PPT→PDF 导出失败跳过该文件；PPT导出PDF 截图失败回退 MinerU |
+| **EasyOCR 降级** | PyMuPDF 提取文字过少（<30字符）时自动调用 EasyOCR 对截图进行文字识别，提升图文混合场景识别率 |
 | **中断恢复** | LLM 调用 3 次指数退避重试，分段失败保留原文，单文件失败不影响后续 |
 
 ## 唯一编码集成

@@ -22,6 +22,37 @@ from datetime import datetime
 from openai import OpenAI
 from PyPDF2 import PdfReader
 import fitz  # PyMuPDF for PDF page rendering
+
+# --- EasyOCR fallback (lazy loaded) ---
+_EASYOCR_READER = None
+
+def _get_easyocr_reader():
+    """Lazy init EasyOCR reader, called on first use"""
+    global _EASYOCR_READER
+    if _EASYOCR_READER is None:
+        try:
+            import easyocr
+            print('  [EasyOCR] initializing reader (first load ~2GB model)...', flush=True)
+            _EASYOCR_READER = easyocr.Reader(['ch_sim', 'en'], gpu=True, verbose=False)
+            print('  [EasyOCR] ready', flush=True)
+        except Exception as e:
+            print(f'  [EasyOCR] init failed: {e}', flush=True)
+            _EASYOCR_READER = '__UNAVAILABLE__'
+    return _EASYOCR_READER if _EASYOCR_READER != '__UNAVAILABLE__' else None
+
+def _extract_text_via_easyocr(img_path):
+    """Extract text from image using EasyOCR"""
+    reader = _get_easyocr_reader()
+    if reader is None:
+        return None
+    try:
+        results = reader.readtext(img_path, detail=0, paragraph=True)
+        text = '\n'.join(results).strip()
+        return text if text else None
+    except Exception as e:
+        print(f'  [EasyOCR] recognition failed: {e}', flush=True)
+        return None
+
 import pythoncom
 
 
@@ -761,11 +792,23 @@ def convert_ppt_pdf_via_slides(pdf_path, output_dir, source_path=None):
                 except Exception:
                     slides_failed += 1
 
-            # ── 文本提取（使用 PyMuPDF 原生方法）──
+            # ── 文本提取（PyMuPDF → 质量检查 → EasyOCR 降级）──
             try:
                 text = page.get_text("text")
-                slides_text.append((page_num + 1, text.strip() if text else ""))
+                text = (text or "").strip()
+
+                # 质量检查：提取文字太少（<30字符）且存在截图时，用 EasyOCR 降级
+                if text and len(text) < 30:
+                    from pathlib import Path as _PdfPath
+                    if img_path and _PdfPath(img_path).exists():
+                        ocr_text = _extract_text_via_easyocr(img_path)
+                        if ocr_text and len(ocr_text) > len(text) + 5:
+                            print(f"  [EasyOCR] page {page_num+1}: PyMuPDF({len(text)}c)->EasyOCR({len(ocr_text)}c)", flush=True)
+                            text = ocr_text
+
+                slides_text.append((page_num + 1, text))
             except Exception:
+                slides_text.append((page_num + 1, ""))
                 slides_text.append((page_num + 1, ""))
         else:
             # PyPDF2 降级模式：仅提取文本，无法截图
