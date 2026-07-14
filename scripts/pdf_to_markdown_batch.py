@@ -798,7 +798,7 @@ def convert_ppt_pdf_via_slides(pdf_path, output_dir, source_path=None):
                 text = (text or "").strip()
 
                 # 质量检查：提取文字太少（<30字符）且存在截图时，用 EasyOCR 降级
-                if text and len(text) < 30:
+                if len(text) < 30:
                     from pathlib import Path as _PdfPath
                     if img_path and _PdfPath(img_path).exists():
                         ocr_text = _extract_text_via_easyocr(img_path)
