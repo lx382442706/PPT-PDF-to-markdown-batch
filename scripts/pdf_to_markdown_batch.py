@@ -22,12 +22,13 @@ from datetime import datetime
 from openai import OpenAI
 from PyPDF2 import PdfReader
 import fitz  # PyMuPDF for PDF page rendering
+import pythoncom
+
 
 # --- EasyOCR fallback (lazy loaded) ---
 _EASYOCR_READER = None
 
 def _get_easyocr_reader():
-    """Lazy init EasyOCR reader, called on first use"""
     global _EASYOCR_READER
     if _EASYOCR_READER is None:
         try:
@@ -41,7 +42,6 @@ def _get_easyocr_reader():
     return _EASYOCR_READER if _EASYOCR_READER != '__UNAVAILABLE__' else None
 
 def _extract_text_via_easyocr(img_path):
-    """Extract text from image using EasyOCR"""
     reader = _get_easyocr_reader()
     if reader is None:
         return None
@@ -52,8 +52,25 @@ def _extract_text_via_easyocr(img_path):
     except Exception as e:
         print(f'  [EasyOCR] recognition failed: {e}', flush=True)
         return None
+def _count_substantive_text(slides_text):
+    from collections import Counter
+    import re as _re
+    all_lines = []
+    for _pn, txt in slides_text:
+        if not txt: continue
+        for line in txt.split(chr(10)):
+            line = line.strip()
+            if not line: continue
+            if _re.match(r"^\d{1,4}$", line): continue
+            if _re.match(r"^第\d+页(?:/共\d+页)?$", line): continue
+            if _re.match(r"^(?:Page|Slide)\s+\d+\s+of\s+\d+$", line, _re.I): continue
+            all_lines.append(line)
+    counter = Counter(all_lines)
+    num_pages = max(len(slides_text), 1)
+    threshold = max(num_pages * 0.6, 2)
+    filtered = [l for l in all_lines if counter[l] < threshold or len(l) > 30]
+    return len(''.join(filtered))
 
-import pythoncom
 
 
 # ─── 跨平台安全目录创建 ────────────────────────────
@@ -792,23 +809,11 @@ def convert_ppt_pdf_via_slides(pdf_path, output_dir, source_path=None):
                 except Exception:
                     slides_failed += 1
 
-            # ── 文本提取（PyMuPDF → 质量检查 → EasyOCR 降级）──
+            # ── 文本提取（PyMuPDF）──
             try:
                 text = page.get_text("text")
-                text = (text or "").strip()
-
-                # 质量检查：提取文字太少（<30字符）且存在截图时，用 EasyOCR 降级
-                if len(text) < 30:
-                    from pathlib import Path as _PdfPath
-                    if img_path and _PdfPath(img_path).exists():
-                        ocr_text = _extract_text_via_easyocr(img_path)
-                        if ocr_text and len(ocr_text) > len(text) + 5:
-                            print(f"  [EasyOCR] page {page_num+1}: PyMuPDF({len(text)}c)->EasyOCR({len(ocr_text)}c)", flush=True)
-                            text = ocr_text
-
-                slides_text.append((page_num + 1, text))
+                slides_text.append((page_num + 1, (text or "").strip()))
             except Exception:
-                slides_text.append((page_num + 1, ""))
                 slides_text.append((page_num + 1, ""))
         else:
             # PyPDF2 降级模式：仅提取文本，无法截图
@@ -825,6 +830,22 @@ def convert_ppt_pdf_via_slides(pdf_path, output_dir, source_path=None):
         except Exception:
             pass
 
+
+    # ── 3. Quality Check: merge -> filter -> EasyOCR batch ──
+    if use_fitz and slides_images and slides_text:
+        st = _count_substantive_text(slides_text)
+        if st < 200:
+            print(f"  [QC] substantive {st}c<200, triggering EasyOCR")
+            import os as _o
+            for idx, (pn, _) in enumerate(slides_text):
+                if idx < len(slides_images):
+                    imgf = _o.path.join(str(att_dir), slides_images[idx])
+                    if _o.path.exists(imgf):
+                        ocr_res = _extract_text_via_easyocr(imgf)
+                        if ocr_res: slides_text[idx] = (pn, ocr_res)
+            print(f"  [QC] EasyOCR done for {len(slides_images)} pages")
+        else: print(f"  [QC] substantive {st}c>=200, keep PyMuPDF")
+
     # ── 3. 打印截图统计 ──
     if use_fitz:
         if slides_failed > 0:
@@ -834,7 +855,7 @@ def convert_ppt_pdf_via_slides(pdf_path, output_dir, source_path=None):
     else:
         print(f"  [PDF截图] 跳过（降级模式，不支持截图）")
 
-    # ── 4. 构建 Markdown ──
+    # ── 5. 构建 Markdown ──
     print(f"  [MD构建] 正在生成 {md_path.name} ... ", end="", flush=True)
 
     has_images = len(slides_images) > 0
